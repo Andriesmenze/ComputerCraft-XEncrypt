@@ -11,7 +11,7 @@ Any player can place a computer with a modem in range and run their own Lua on i
 - record messages and send them again later;
 - send huge or malformed messages, or flood a computer: a computer's event queue holds 256 events, and the rest are dropped.
 
-It cannot read the disk of a computer it cannot open.
+It cannot read the disk of a computer it cannot physically reach. A player who can reach one can hold Ctrl+R with a disk drive attached and boot their own code from the disk, unless the computer has `shell.allow_disk_startup` set to `false`. Set that on every server and client: `settings.set("shell.allow_disk_startup", false)` and `settings.save()`.
 
 ## Keys
 
@@ -23,13 +23,13 @@ It cannot read the disk of a computer it cannot open.
     - Let a code expire after a few minutes and after one use.
     - Never let a registration overwrite an existing client without the admin's say-so.
     - Treat the code like a password, even after it was used: anyone who recorded the registration message and later learns the code can recover the client's key.
-    - Pin the iteration count as a constant in your program. If client and server use different values, they derive different keys.
+    - Pin the iteration count as a constant in your program (xEncrypt accepts 1 to 5000). If client and server use different values, they derive different keys.
 - **Entropy.** A fresh computer has little entropy. Before generating a long-term key, call `xEncrypt.addEntropy(tostring(os.epoch("utc")) .. event)` for every key press while the user types (for example while entering the registration code).
 
 ## Messages
 
 - **Use the AAD.** Encrypt requests with aad `"myapp request " .. clientId` and responses with `"myapp response " .. clientId`. A request then cannot be replayed as a response or passed off as coming from another client.
-- **Never run code from the network.** Do not call `textutils.unserialize`, `load` or `loadstring` on anything received, not even after `decrypt` succeeds. `textutils.unserialize` runs its input as Lua, so a registered but malicious client could loop forever or allocate gigabytes on your server. Encode messages as JSON with `textutils.serializeJSON` / `textutils.unserializeJSON` (wrapped in `pcall`), or as a fixed format you parse yourself. Then check every field's type, length and allowed values.
+- **Never run code from the network.** Do not call `textutils.unserialize`, `load` or `loadstring` on anything received, not even after `decrypt` succeeds. `textutils.unserialize` runs its input as Lua, so a registered but malicious client could stall your server for about 7 seconds per message (unserialize's own `pcall` catches the timeout), allocate gigabytes with `string.rep`, or trigger the hard abort that shuts the computer down. Encode messages as JSON with `textutils.serializeJSON` / `textutils.unserializeJSON` (wrapped in `pcall`), or as a fixed format you parse yourself. Then check every field's type, length and allowed values. JSON only round-trips ASCII: `serializeJSON` writes bytes 0x80-0xFF as `\u00XX` and `unserializeJSON` turns those into UTF-8, so text typed in game (`"caf\233"`) comes back changed. Hex-encode (`xEncrypt.toHex`) any field that can hold such bytes, or reject non-ASCII fields.
 - **Replays.** Every request carries a random ID (`xEncrypt.toHex(xEncrypt.randomBytes(16))`) and `os.epoch("utc")`. The server rejects requests more than about 60 seconds old and IDs it has seen in the last few minutes. All computers in one world share the server's clock. The response echoes the request ID, and the client accepts only a response with its own ID.
 - **Size limits first.** Check the envelope before any crypto: it must be a table, have the expected fields and types, and `#box` must be below your maximum. Pass a `maxLength` to `decrypt` that fits your largest message. Hex decoding and MAC checks cost time in proportion to size, and a computer that runs about 7 seconds without yielding is stopped.
 - **Fail silently.** Do not answer anything that fails a check before `decrypt` succeeds: wrong format, unknown client, bad tag. Replies go to a sender ID that an attacker can fake. Error replies to unauthenticated messages can be aimed at another server, or at the server itself, to start an endless loop.
@@ -61,5 +61,6 @@ It cannot read the disk of a computer it cannot open.
 ## Known limits
 
 - Anyone in range can jam the network by flooding it. Encryption cannot prevent that.
-- A shared, public terminal can be opened by anyone who can stop the program (Ctrl+T), and its key read. Set `os.pullEvent = os.pullEventRaw` in the client so Ctrl+T does not stop it, and treat such terminals as untrusted.
+- A shared, public terminal can be opened by anyone who can stop the program (Ctrl+T) or reboot it from a disk (Ctrl+R, see the threat model), and its key read. Set `os.pullEvent = os.pullEventRaw` in the client so Ctrl+T does not stop it, turn off `shell.allow_disk_startup`, and still treat such terminals as untrusted.
+- The client deadline loop relies on one timer event. When a flood fills the computer's 256-event queue, that timer can be dropped, and `rednet.receive` then waits until a matching message arrives. A client that must never hang can pull events itself, compare `os.clock()` with the deadline on every event, and start a new timer for the remaining time after each one.
 - Without a key exchange such as Diffie-Hellman there is no forward secrecy: if a client key leaks, recorded traffic of that client can be decrypted.

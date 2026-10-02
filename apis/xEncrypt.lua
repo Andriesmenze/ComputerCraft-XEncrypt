@@ -40,7 +40,9 @@ local unpack = table.unpack or unpack
 local MOD32 = 4294967296
 local SEED_FILE = "/.xEncrypt.seed"
 local DEFAULT_ITERATIONS = 1000
-local MAX_ITERATIONS = 10000 -- more would not finish within CC's 7 s limit on a busy server
+-- About 0.6 ms per iteration on CC's Cobalt VM, so the cap keeps one PBKDF2
+-- run at around half of CC's 7 second "too long without yielding" limit.
+local MAX_ITERATIONS = 5000
 local DEFAULT_MAX_LENGTH = 65536
 
 local function expectString(value, index, name)
@@ -222,12 +224,16 @@ function hkdf(ikm, salt, info, length)
 end
 
 -- Derives `length` raw bytes from a password with PBKDF2-HMAC-SHA256.
+local function expectIterations(iterations, index, name)
+    if type(iterations) ~= "number" or iterations < 1 or iterations > MAX_ITERATIONS or iterations % 1 ~= 0 then
+        error(format("bad argument #%d to '%s' (iterations must be an integer from 1 to %d)", index, name, MAX_ITERATIONS), 3)
+    end
+end
+
 function pbkdf2(password, salt, iterations, length)
     expectString(password, 1, "pbkdf2")
     expectString(salt, 2, "pbkdf2")
-    if type(iterations) ~= "number" or iterations < 1 or iterations > MAX_ITERATIONS or iterations % 1 ~= 0 then
-        error("bad argument #3 to 'pbkdf2' (iterations must be an integer from 1 to " .. MAX_ITERATIONS .. ")", 2)
-    end
+    expectIterations(iterations, 3, "pbkdf2")
     length = length or 32
     if type(length) ~= "number" or length < 1 or length > 1024 or length % 1 ~= 0 then
         error("bad argument #4 to 'pbkdf2' (length must be an integer from 1 to 1024)", 2)
@@ -289,8 +295,9 @@ function chacha20(key, nonce, counter, data)
     expectString(data, 4, "chacha20")
     if #key ~= 32 then error("bad argument #1 to 'chacha20' (key must be 32 bytes)", 2) end
     if #nonce ~= 12 then error("bad argument #2 to 'chacha20' (nonce must be 12 bytes)", 2) end
+    -- Written without counter + blocks, which can overflow on integer Lua.
     if type(counter) ~= "number" or counter < 0 or counter % 1 ~= 0
-        or counter + ceil(#data / 64) > MOD32 then
+        or counter > MOD32 - ceil(#data / 64) then
         error("bad argument #3 to 'chacha20' (counter out of range)", 2)
     end
     local state = {
@@ -324,6 +331,7 @@ end
 ---------------------------------------------------------------------------
 
 local generatorKey
+local seedDirty = false -- addEntropy data not yet carried into the seed file
 local ZERO_NONCE = rep("\0", 12)
 
 -- Returns the seed file's 64 hex characters, or nil if it is missing or damaged.
@@ -354,8 +362,9 @@ local function writeSeedFile(hex)
 end
 
 -- Most of these values are public or guessable for other players; they only
--- make pools differ. The secret part comes from the timing jitter, table
--- addresses, math.random's startup seed and the seed file.
+-- make pools differ. math.random is not secret either (every rednet.send
+-- broadcasts one of its outputs). The secret part comes from the timing
+-- jitter, table addresses and the seed file.
 local function gatherEntropy()
     local pool = {}
     local function add(value)
@@ -405,11 +414,14 @@ function seed()
     ensureSeeded()
 end
 
--- Mixes extra unpredictable data into the generator.
+-- Mixes extra unpredictable data into the generator. It reaches the seed file
+-- (and so later boots) the next time random bytes are drawn, which keeps a
+-- program that calls this on every key press from writing the disk each time.
 function addEntropy(data)
     expectString(data, 1, "addEntropy")
     ensureSeeded()
     generatorKey = finish(copyState(IV256), generatorKey .. data, 0)
+    seedDirty = true
 end
 
 -- Returns n random bytes (raw string).
@@ -420,15 +432,20 @@ function randomBytes(n)
     ensureSeeded()
     local stream = chacha20(generatorKey, ZERO_NONCE, 0, rep("\0", 32 + n))
     generatorKey = stream:sub(1, 32)
+    if seedDirty then
+        seedDirty = false
+        writeSeedFile(toHex(randomBytes(32)))
+    end
     return stream:sub(33)
 end
 
 -- Returns a uniformly distributed random integer from min to max (inclusive),
--- like math.random(min, max) but from the secure generator.
+-- like math.random(min, max) but from the secure generator. The bounds must lie
+-- within +/-2^53 (where doubles are exact) and span less than 2^32.
 function randomInt(min, max)
     if type(min) ~= "number" or type(max) ~= "number" or min % 1 ~= 0 or max % 1 ~= 0
-        or min > max or max - min >= MOD32 then
-        error("bad argument to 'randomInt' (integers min <= max with max - min < 2^32 expected)", 2)
+        or min < -2 ^ 53 or max > 2 ^ 53 or min > max or max - min >= MOD32 then
+        error("bad argument to 'randomInt' (integers -2^53 <= min <= max <= 2^53 with max - min < 2^32 expected)", 2)
     end
     local range = max - min + 1
     local limit = MOD32 - MOD32 % range -- reject values above the last full multiple of range
@@ -451,7 +468,9 @@ end
 function deriveKey(password, salt, iterations)
     expectString(password, 1, "deriveKey")
     expectString(salt, 2, "deriveKey")
-    return toHex(pbkdf2(password, salt, iterations or DEFAULT_ITERATIONS, 32))
+    iterations = iterations or DEFAULT_ITERATIONS
+    expectIterations(iterations, 3, "deriveKey")
+    return toHex(pbkdf2(password, salt, iterations, 32))
 end
 
 ---------------------------------------------------------------------------
@@ -530,6 +549,7 @@ end
 function hashPassword(password, iterations)
     expectString(password, 1, "hashPassword")
     iterations = iterations or DEFAULT_ITERATIONS
+    expectIterations(iterations, 2, "hashPassword")
     local salt = randomBytes(16)
     return format("pbkdf2-sha256$%d$%s$%s", iterations, toHex(salt), toHex(pbkdf2(password, salt, iterations, 32)))
 end

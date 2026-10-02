@@ -2,10 +2,15 @@
 --
 -- Strings in CC:Tweaked are bytes, and the terminal draws each byte as one
 -- character; bytes 0xA0-0xFF look like ISO-8859-1. Input text is read as UTF-8
--- where it is valid UTF-8 (files written outside the game, http responses), and
--- every other byte as the single character it shows as in CC. Note that a CC
--- string which happens to be valid UTF-8 (for example "\195\169") is read as
--- one UTF-8 character ("U+00E9").
+-- where it is valid UTF-8, and any other byte as the code point with the same
+-- value (ISO-8859-1). For 0xA0-0xFF that is the character CC shows; CC's drawing
+-- characters 0x80-0x9F become the control code points U+0080-U+009F, not
+-- look-alike block characters. A CC string which happens to be valid UTF-8 (for
+-- example "\195\169") is read as one UTF-8 character ("U+00E9").
+--
+-- To get UTF-8 from outside the game unchanged on every CC:Tweaked version,
+-- read it as bytes: fs.open(path, "rb") or http.get(url, headers, true). Before
+-- CC:Tweaked 1.109, text-mode reads turn every character above U+00FF into "?".
 --
 -- Output text uses the CC charset by default (one byte per character, "?" for
 -- code points above U+00FF); pass asUTF8 = true to get UTF-8 instead.
@@ -111,13 +116,23 @@ function transcodeUTF8String(utf8_String)
 end
 
 -- "U+0048U+00E9" -> "H\233". Text that is not in "U+" notation is skipped and
--- invalid code points become "?".
+-- invalid code points become "?". A code takes up to 6 hex digits, so separate
+-- one that does not start with 0 from following hex text ("U+20AC 1", not
+-- "U+20AC1").
 function transcodeUnicodeString(unicode_String, asUTF8)
     expectString(unicode_String, "transcodeUnicodeString")
-    local out = {}
-    for hex in unicode_String:gmatch("[Uu]%+(%x%x%x%x%x?%x?)") do
+    local out, pos = {}, 1
+    while true do
+        local _, last, hex = unicode_String:find("[Uu]%+(%x%x%x%x%x?%x?)", pos)
+        if not last then break end
+        -- Leading zeros only pad to 4 digits, so in "U+00C9cole" the code is
+        -- U+00C9 and "c" is following text, not a fifth digit.
+        while #hex > 4 and hex:sub(1, 1) == "0" do
+            hex, last = hex:sub(1, -2), last - 1
+        end
         local cp = parseCode(hex)
         out[#out + 1] = cp and toCharacter(cp, asUTF8) or "?"
+        pos = last + 1
     end
     return concat(out)
 end

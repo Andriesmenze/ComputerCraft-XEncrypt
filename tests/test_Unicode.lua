@@ -72,6 +72,22 @@ test("transcodeUTF8Character needs exactly one character", function()
     eq(U.transcodeUTF8Character("\195\169x"), nil)
 end)
 
+test("leading zeros only pad to 4 digits, so following hex text is not swallowed", function()
+    eq(U.transcodeUnicodeString("U+00C9cole", true), "\195\137")
+    eq(U.transcodeUnicodeString("U+0041BC"), "A")
+    eq(U.transcodeUnicodeString("Price: U+00A3100"), "\163")
+    eq(U.transcodeUnicodeString("u+00e9e"), "\233")
+    eq(U.transcodeUnicodeString("U+01F600", true), "\199\182", "a leading zero means exactly 4 digits: U+01F6, then '00'")
+    eq(U.transcodeUnicodeString("U+1F600", true), "\240\159\152\128")
+    for cp = 0, 0xFFF, 17 do
+        eq(U.transcodeUnicodeString(string.format("U+%04Xabc", cp), true),
+            U.transcodeUnicodeCharacter(string.format("U+%04X", cp), true), "cp " .. cp)
+    end
+    -- Codes without a leading zero take up to 6 digits, as documented.
+    eq(U.transcodeUnicodeString("U+20AC 1", true), "\226\130\172")
+    eq(U.transcodeUnicodeString("U+110000"), "?")
+end)
+
 test("invalid notation", function()
     eq(U.transcodeUnicodeCharacter("U+12"), nil)
     eq(U.transcodeUnicodeCharacter("U+0041x"), nil)

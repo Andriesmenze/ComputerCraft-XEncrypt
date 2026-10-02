@@ -136,7 +136,10 @@ end)
 test("pbkdf2 validates its arguments", function()
     raises(function() X.pbkdf2("p", "s", 0) end, "iterations")
     raises(function() X.pbkdf2("p", "s", 1.5) end, "iterations")
-    raises(function() X.pbkdf2("p", "s", 10001) end, "iterations")
+    raises(function() X.pbkdf2("p", "s", 5001) end, "iterations")
+    raises(function() X.hashPassword("p", 5001) end, "'hashPassword' %(iterations")
+    raises(function() X.deriveKey("p", "s", 0) end, "'deriveKey' %(iterations")
+    eq(#X.pbkdf2("p", "s", 5000, 1), 1, "the cap itself is allowed")
     raises(function() X.pbkdf2("p", "s", 1, 0) end, "length")
     raises(function() X.pbkdf2(nil, "s", 1) end, "string expected")
 end)
@@ -179,6 +182,10 @@ test("chacha20 validates its arguments", function()
     raises(function() X.chacha20(KEY, nonce, 0.5, "x") end, "counter")
     raises(function() X.chacha20(KEY, nonce, 4294967295, string.rep("x", 65)) end, "counter")
     eq(#X.chacha20(KEY, nonce, 4294967295, string.rep("x", 64)), 64)
+    raises(function() X.chacha20(KEY, nonce, 4294967296, "x") end, "counter")
+    if math.maxinteger then -- integer Lua: counter + blocks must not overflow past the check
+        raises(function() X.chacha20(KEY, nonce, math.maxinteger, string.rep("x", 128)) end, "counter")
+    end
 end)
 
 ---------------------------------------------------------------------------
@@ -267,6 +274,49 @@ test("randomInt stays in range and covers it", function()
     raises(function() X.randomInt(1.5, 3) end, "randomInt")
     raises(function() X.randomInt(0, 4294967296) end, "randomInt")
     raises(function() X.randomInt(nil, 3) end, "randomInt")
+    -- Beyond 2^53 doubles cannot represent every integer.
+    eq(X.randomInt(2 ^ 53, 2 ^ 53), 2 ^ 53)
+    raises(function() X.randomInt(2 ^ 53, 2 ^ 53 + 2) end, "randomInt")
+    raises(function() X.randomInt(-2 ^ 53 - 2, -2 ^ 53) end, "randomInt")
+    for _ = 1, 50 do
+        local v = X.randomInt(2 ^ 53 - 2, 2 ^ 53)
+        ok(v >= 2 ^ 53 - 2 and v <= 2 ^ 53, tostring(v))
+    end
+    if math.maxinteger then
+        raises(function() X.randomInt(math.mininteger, math.maxinteger) end, "randomInt")
+        raises(function() X.randomInt(-2 ^ 62, 2 ^ 62) end, "randomInt")
+    end
+end)
+
+test("addEntropy data reaches the seed file at the next random draw", function()
+    local function deterministicComputer()
+        local C = cc.newComputer(45, { clock = 1, epoch = 7 })
+        C.env.tostring = function(v)
+            local t = type(v)
+            if t == "table" or t == "function" then return t end
+            return tostring(v)
+        end
+        C.env.math = setmetatable({ random = function() return 4 end }, { __index = math })
+        return C
+    end
+    local function nextBoot(secret)
+        local C = deterministicComputer()
+        local XC = C:loadAPI("apis/xEncrypt.lua")
+        XC.seed()
+        local before = C.files[".xEncrypt.seed"]
+        if secret then XC.addEntropy(secret) end
+        eq(C.files[".xEncrypt.seed"], before, "addEntropy itself does not write the disk")
+        XC.randomBytes(1)
+        if secret then neq(C.files[".xEncrypt.seed"], before, "the next draw saves it") end
+        XC.randomBytes(1)
+        local saved = C.files[".xEncrypt.seed"]
+        -- "Reboot" the same computer and look at its first output.
+        return C:loadAPI("apis/xEncrypt.lua").randomBytes(16), saved
+    end
+    local a = nextBoot("key presses A")
+    local b = nextBoot("key presses B")
+    neq(a, b, "the next boot depends on the entropy added in this one")
+    eq(nextBoot("key presses A"), a)
 end)
 
 test("a read-only disk does not break random generation", function()
