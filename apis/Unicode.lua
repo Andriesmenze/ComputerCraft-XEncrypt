@@ -1,61 +1,123 @@
-Unicode_VERSION = "0.1"
-local unicode_To_UTF8_Character_Table = {
-    ["U+0020"] = " ", ["U+0021"] = "!", ["U+0022"] = '"', ["U+0023"] = "#", ["U+0024"] = "$", ["U+0025"] = "%",
-    ["U+0026"] = "&", ["U+0027"] = "'", ["U+0028"] = "(", ["U+0029"] = ")", ["U+002A"] = "*", ["U+002B"] = "+",
-    ["U+002C"] = ",", ["U+002D"] = "-", ["U+002E"] = ".", ["U+002F"] = "/", ["U+0030"] = "0", ["U+0031"] = "1",
-    ["U+0032"] = "2", ["U+0033"] = "3", ["U+0034"] = "4", ["U+0035"] = "5", ["U+0036"] = "6", ["U+0037"] = "7",
-    ["U+0038"] = "8", ["U+0039"] = "9", ["U+003A"] = ":", ["U+003B"] = ";", ["U+003C"] = "<", ["U+003D"] = "=",
-    ["U+003E"] = ">", ["U+003F"] = "?", ["U+0040"] = "@", ["U+0041"] = "A", ["U+0042"] = "B", ["U+0043"] = "C",
-    ["U+0044"] = "D", ["U+0045"] = "E", ["U+0046"] = "F", ["U+0047"] = "G", ["U+0048"] = "H", ["U+0049"] = "I",
-    ["U+004A"] = "J", ["U+004B"] = "K", ["U+004C"] = "L", ["U+004D"] = "M", ["U+004E"] = "N", ["U+004F"] = "O",
-    ["U+0050"] = "P", ["U+0051"] = "Q", ["U+0052"] = "R", ["U+0053"] = "S", ["U+0054"] = "T", ["U+0055"] = "U",
-    ["U+0056"] = "V", ["U+0057"] = "W", ["U+0058"] = "X", ["U+0059"] = "Y", ["U+005A"] = "Z", ["U+005B"] = "[",
-    ["U+005D"] = "]", ["U+005E"] = "^", ["U+005F"] = "_", ["U+0060"] = "`", ["U+0061"] = "a", ["U+0062"] = "b",
-    ["U+0063"] = "c", ["U+0064"] = "d", ["U+0065"] = "e", ["U+0066"] = "f", ["U+0067"] = "g", ["U+0068"] = "h",
-    ["U+0069"] = "i", ["U+006A"] = "j", ["U+006B"] = "k", ["U+006C"] = "l", ["U+006D"] = "m", ["U+006E"] = "n",
-    ["U+006F"] = "o", ["U+0070"] = "p", ["U+0071"] = "q", ["U+0072"] = "r", ["U+0073"] = "s", ["U+0074"] = "t",
-    ["U+0075"] = "u", ["U+0076"] = "v", ["U+0077"] = "w", ["U+0078"] = "x", ["U+0079"] = "y", ["U+007A"] = "z",
-    ["U+007B"] = "{", ["U+007C"] = "|", ["U+007D"] = "}", ["U+007E"] = "~", ["U+00A1"] = "¡", ["U+00A2"] = "¢",
-    ["U+00A3"] = "£", ["U+00A4"] = "¤", ["U+00A5"] = "¥", ["U+00A6"] = "¦", ["U+00A7"] = "§", ["U+00A8"] = "¨",
-    ["U+00A9"] = "©", ["U+00AA"] = "ª", ["U+00AB"] = "«", ["U+00AC"] = "¬", ["U+00AE"] = "®", ["U+00AF"] = "¯",
-    ["U+00B0"] = "°", ["U+00B1"] = "±", ["U+00B2"] = "²", ["U+00B3"] = "³", ["U+00B4"] = "´", ["U+00B5"] = "µ",
-    ["U+00B6"] = "¶", ["U+00B7"] = "·", ["U+00B8"] = "¸", ["U+00B9"] = "¹", ["U+00BA"] = "º", ["U+00BB"] = "»",
-    ["U+00BC"] = "¼", ["U+00BD"] = "½", ["U+00BE"] = "¾", ["U+00BF"] = "¿", ["U+00C0"] = "À", ["U+00C1"] = "Á",
-    ["U+00C2"] = "Â", ["U+00C3"] = "Ã", ["U+00C4"] = "Ä", ["U+00C5"] = "Å", ["U+00C6"] = "Æ", ["U+00C7"] = "Ç",
-    ["U+00C8"] = "È", ["U+00C9"] = "É", ["U+00CA"] = "Ê", ["U+00CB"] = "Ë", ["U+00CC"] = "Ì", ["U+00CD"] = "Í",
-    ["U+00CE"] = "Î", ["U+00CF"] = "Ï", ["U+00D0"] = "Ð", ["U+00D1"] = "Ñ", ["U+00D2"] = "Ò", ["U+00D3"] = "Ó",
-    ["U+00D4"] = "Ô", ["U+00D5"] = "Õ", ["U+00D6"] = "Ö", ["U+00D7"] = "×", ["U+00D8"] = "Ø", ["U+00D9"] = "Ù",
-    ["U+00DA"] = "Ú", ["U+00DB"] = "Û", ["U+00DC"] = "Ü", ["U+00DD"] = "Ý", ["U+00DE"] = "Þ", ["U+00DF"] = "ß",
-    ["U+00E0"] = "à", ["U+00E1"] = "á", ["U+00E2"] = "â", ["U+00E3"] = "ã", ["U+00E4"] = "ä", ["U+00E5"] = "å",
-    ["U+00E6"] = "æ", ["U+00E7"] = "ç", ["U+00E8"] = "è", ["U+00E9"] = "é", ["U+00EA"] = "ê", ["U+00EB"] = "ë",
-    ["U+00EC"] = "ì", ["U+00ED"] = "í", ["U+00EE"] = "î", ["U+00EF"] = "ï", ["U+00F0"] = "ð", ["U+00F1"] = "ñ",
-    ["U+00F2"] = "ò", ["U+00F3"] = "ó", ["U+00F4"] = "ô", ["U+00F5"] = "õ", ["U+00F6"] = "ö", ["U+00F7"] = "÷",
-    ["U+00F8"] = "ø", ["U+00F9"] = "ù", ["U+00FA"] = "ú", ["U+00FB"] = "û", ["U+00FC"] = "ü", ["U+00FD"] = "ý",
-    ["U+00FE"] = "þ", ["U+00FF"] = "ÿ"
-}
-local utf8_To_Unicode_Character_Table = {}
-for unicode, utf8 in pairs(unicode_To_UTF8_Character_Table) do
-    utf8_To_Unicode_Character_Table[utf8] = unicode
+-- Converts between text and "U+XXXX" code point notation.
+--
+-- Strings in CC:Tweaked are bytes, and the terminal draws each byte as one
+-- character; bytes 0xA0-0xFF look like ISO-8859-1. Input text is read as UTF-8
+-- where it is valid UTF-8 (files written outside the game, http responses), and
+-- every other byte as the single character it shows as in CC. Note that a CC
+-- string which happens to be valid UTF-8 (for example "\195\169") is read as
+-- one UTF-8 character ("U+00E9").
+--
+-- Output text uses the CC charset by default (one byte per character, "?" for
+-- code points above U+00FF); pass asUTF8 = true to get UTF-8 instead.
+
+Unicode_VERSION = "0.2"
+
+local byte, char, format = string.byte, string.char, string.format
+local concat, floor = table.concat, math.floor
+
+-- Returns the code point at byte position i of s and its length in bytes.
+local function decodeAt(s, i)
+    local a, b, c, d = byte(s, i, i + 3)
+    if a < 0x80 then
+        return a, 1
+    end
+    local b2 = b and b >= 0x80 and b <= 0xBF
+    local c3 = b2 and c and c >= 0x80 and c <= 0xBF
+    local d4 = c3 and d and d >= 0x80 and d <= 0xBF
+    if a >= 0xC2 and a <= 0xDF and b2 then
+        return (a - 0xC0) * 64 + (b - 0x80), 2
+    elseif a >= 0xE0 and a <= 0xEF and c3 and not (a == 0xE0 and b < 0xA0) and not (a == 0xED and b > 0x9F) then
+        return ((a - 0xE0) * 64 + (b - 0x80)) * 64 + (c - 0x80), 3
+    elseif a >= 0xF0 and a <= 0xF4 and d4 and not (a == 0xF0 and b < 0x90) and not (a == 0xF4 and b > 0x8F) then
+        return (((a - 0xF0) * 64 + (b - 0x80)) * 64 + (c - 0x80)) * 64 + (d - 0x80), 4
+    end
+    -- Not UTF-8: the byte itself, as CC shows it.
+    return a, 1
 end
+
+local function encodeUTF8(cp)
+    if cp < 0x80 then
+        return char(cp)
+    elseif cp < 0x800 then
+        return char(0xC0 + floor(cp / 64), 0x80 + cp % 64)
+    elseif cp < 0x10000 then
+        return char(0xE0 + floor(cp / 4096), 0x80 + floor(cp / 64) % 64, 0x80 + cp % 64)
+    end
+    return char(0xF0 + floor(cp / 262144), 0x80 + floor(cp / 4096) % 64, 0x80 + floor(cp / 64) % 64, 0x80 + cp % 64)
+end
+
+local function codeNotation(cp)
+    return format("U+%04X", cp)
+end
+
+-- Parses the hex digits of a code point; nil if it is not a Unicode scalar value.
+local function parseCode(hex)
+    local cp = tonumber(hex, 16)
+    if not cp or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF) then
+        return nil
+    end
+    return cp
+end
+
+local function toCharacter(cp, asUTF8)
+    if asUTF8 then
+        return encodeUTF8(cp)
+    end
+    return cp <= 0xFF and char(cp) or "?"
+end
+
+local function expectString(value, name)
+    if type(value) ~= "string" then
+        error(format("bad argument #1 to '%s' (string expected, got %s)", name, type(value)), 3)
+    end
+end
+
+-- "\195\169" (e acute in UTF-8) -> "U+00E9". Returns nil unless the input is
+-- exactly one character.
 function transcodeUTF8Character(utf8_Character)
-    local outputUnicode = utf8_To_Unicode_Character_Table[utf8_Character]
-    return outputUnicode
+    expectString(utf8_Character, "transcodeUTF8Character")
+    if utf8_Character == "" then
+        return nil
+    end
+    local cp, length = decodeAt(utf8_Character, 1)
+    if length ~= #utf8_Character then
+        return nil
+    end
+    return codeNotation(cp)
 end
-function transcodeUnicodeCharacter(unicode_Character)
-    local outputUTF8 = unicode_To_UTF8_Character_Table[unicode_Character]
-    return outputUTF8
+
+-- "U+00E9" (or "u+00e9") -> "\233" (e acute). Returns nil if the input is not exactly one
+-- code point in "U+" notation with 4 to 6 hex digits.
+function transcodeUnicodeCharacter(unicode_Character, asUTF8)
+    expectString(unicode_Character, "transcodeUnicodeCharacter")
+    local hex = unicode_Character:match("^[Uu]%+(%x%x%x%x%x?%x?)$")
+    local cp = hex and parseCode(hex)
+    if not cp then
+        return nil
+    end
+    return toCharacter(cp, asUTF8)
 end
+
+-- "H\233" -> "U+0048U+00E9"
 function transcodeUTF8String(utf8_String)
-    local outputUnicodeString = ""
-    for character = 1, string.len(utf8_String) do
-        outputUnicodeString = outputUnicodeString..transcodeUTF8Character(string.sub(utf8_String, character, character))
+    expectString(utf8_String, "transcodeUTF8String")
+    local out, i, n = {}, 1, #utf8_String
+    while i <= n do
+        local cp, length = decodeAt(utf8_String, i)
+        out[#out + 1] = codeNotation(cp)
+        i = i + length
     end
-    return outputUnicodeString
+    return concat(out)
 end
-function transcodeUnicodeString(unicode_String)
-    local outputUTF8String = ""
-    for match in (unicode_String):gmatch("U%+%x%x%x%x") do
-        outputUTF8String = outputUTF8String..transcodeUnicodeCharacter(match)
+
+-- "U+0048U+00E9" -> "H\233". Text that is not in "U+" notation is skipped and
+-- invalid code points become "?".
+function transcodeUnicodeString(unicode_String, asUTF8)
+    expectString(unicode_String, "transcodeUnicodeString")
+    local out = {}
+    for hex in unicode_String:gmatch("[Uu]%+(%x%x%x%x%x?%x?)") do
+        local cp = parseCode(hex)
+        out[#out + 1] = cp and toCharacter(cp, asUTF8) or "?"
     end
-    return outputUTF8String
+    return concat(out)
 end
