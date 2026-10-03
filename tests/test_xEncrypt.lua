@@ -55,6 +55,9 @@ test("constantTimeEquals", function()
     ok(not X.constantTimeEquals("abc", "ab"))
     ok(not X.constantTimeEquals("abc", nil))
     ok(not X.constantTimeEquals(1, 1))
+    -- Differences in several bytes must not cancel out.
+    ok(not X.constantTimeEquals("ab", "ba"))
+    ok(not X.constantTimeEquals("\1\1", "\0\0"))
 end)
 
 ---------------------------------------------------------------------------
@@ -141,6 +144,11 @@ test("pbkdf2 validates its arguments", function()
     raises(function() X.deriveKey("p", "s", 0) end, "'deriveKey' %(iterations")
     eq(#X.pbkdf2("p", "s", 5000, 1), 1, "the cap itself is allowed")
     raises(function() X.pbkdf2("p", "s", 1, 0) end, "length")
+    -- The cap bounds iterations times 32-byte output blocks, not iterations alone.
+    raises(function() X.pbkdf2("p", "s", 5000, 64) end, "ceil%(length / 32%)")
+    raises(function() X.pbkdf2("p", "s", 1000, 1024) end, "ceil%(length / 32%)")
+    raises(function() X.pbkdf2("p", "s", 2501, 64) end, "ceil%(length / 32%)")
+    eq(#X.pbkdf2("p", "s", 1, 1024), 1024)
     raises(function() X.pbkdf2(nil, "s", 1) end, "string expected")
 end)
 
@@ -198,8 +206,16 @@ test("randomBytes returns the requested length and differs per call", function()
     eq(#X.randomBytes(100), 100)
     local a, b = X.randomBytes(32), X.randomBytes(32)
     neq(a, b)
-    raises(function() X.randomBytes(-1) end, "non%-negative")
-    raises(function() X.randomBytes(1.5) end, "non%-negative")
+    raises(function() X.randomBytes(-1) end, "randomBytes")
+    raises(function() X.randomBytes(1.5) end, "randomBytes")
+    raises(function() X.randomBytes(0 / 0) end, "randomBytes")
+    -- 32 + n must not wrap in Cobalt's 32-bit string.rep count (or overflow on
+    -- integer Lua), which would leave the generator with an empty key.
+    raises(function() X.randomBytes(16777217) end, "randomBytes")
+    raises(function() X.randomBytes(2 ^ 32) end, "randomBytes")
+    raises(function() X.randomBytes(math.huge) end, "randomBytes")
+    if math.maxinteger then raises(function() X.randomBytes(math.maxinteger) end, "randomBytes") end
+    eq(#X.randomBytes(16), 16, "generator still works after rejected calls")
 end)
 
 test("generateKey returns 64 lowercase hex characters", function()
@@ -220,27 +236,70 @@ test("seeding writes a seed file and reads it back on the next load", function()
     neq(B.files[".xEncrypt.seed"], seed1, "seed file is replaced on every seeding")
 end)
 
-test("the seed file feeds the generator", function()
-    -- Make every other entropy source deterministic, then vary only the seed file.
-    local function deterministicComputer(seed)
-        local C = cc.newComputer(42, { clock = 1, epoch = 7 })
+-- A computer whose entropy sources are all fixed, so a test can vary one input
+-- at a time. opts.seed is the seed file content; opts.epochEvery = k makes
+-- os.epoch("utc") advance 1 ms every k calls (timing jitter); opts.realTostring
+-- keeps table addresses; opts.random is what math.random returns.
+local function deterministicComputer(opts)
+    opts = opts or {}
+    local C = cc.newComputer(opts.id or 42, { clock = 1, epoch = 7 })
+    if not opts.realTostring then
         C.env.tostring = function(v)
             local t = type(v)
             if t == "table" or t == "function" then return t end
             return tostring(v)
         end
-        C.env.math = setmetatable({ random = function() return 4 end }, { __index = math })
-        C.files[".xEncrypt.seed"] = seed
-        return C:loadAPI("apis/xEncrypt.lua").randomBytes(32)
     end
-    eq(deterministicComputer(nil), deterministicComputer(nil), "sources are deterministic")
-    eq(deterministicComputer(string.rep("a", 64)), deterministicComputer(string.rep("a", 64)))
-    neq(deterministicComputer(string.rep("a", 64)), deterministicComputer(string.rep("b", 64)))
-    neq(deterministicComputer(string.rep("a", 64)), deterministicComputer(nil))
+    C.env.math = setmetatable({ random = function() return opts.random or 4 end }, { __index = math })
+    C.files[".xEncrypt.seed"] = opts.seed
+    if opts.epochEvery then
+        local calls, now, epoch = 0, 1000, C.env.os.epoch
+        C.env.os.epoch = function(kind)
+            if kind ~= "utc" then return epoch(kind) end
+            calls = calls + 1
+            if calls % opts.epochEvery == 0 then now = now + 1 end
+            return now
+        end
+    end
+    return C
+end
+
+local function firstOutput(opts)
+    return deterministicComputer(opts):loadAPI("apis/xEncrypt.lua").randomBytes(32)
+end
+
+test("the seed file feeds the generator", function()
+    eq(firstOutput(), firstOutput(), "sources are deterministic")
+    local a, b = string.rep("a", 64), string.rep("b", 64)
+    eq(firstOutput({ seed = a }), firstOutput({ seed = a }))
+    neq(firstOutput({ seed = a }), firstOutput({ seed = b }))
+    neq(firstOutput({ seed = a }), firstOutput())
     -- A damaged seed file is ignored rather than trusted.
-    eq(deterministicComputer("garbage"), deterministicComputer(nil))
-    eq(deterministicComputer(string.rep("A", 64)), deterministicComputer(nil))
-    eq(deterministicComputer(string.rep("a", 65)), deterministicComputer(nil))
+    eq(firstOutput({ seed = "garbage" }), firstOutput())
+    eq(firstOutput({ seed = string.rep("A", 64) }), firstOutput())
+    eq(firstOutput({ seed = string.rep("a", 65) }), firstOutput())
+end)
+
+test("each source another player cannot know changes the key", function()
+    -- Timing jitter: the loop counts how many calls fit in one clock tick.
+    eq(firstOutput({ epochEvery = 3 }), firstOutput({ epochEvery = 3 }))
+    neq(firstOutput({ epochEvery = 3 }), firstOutput({ epochEvery = 7 }), "jitter counts are used")
+    -- Table and function addresses.
+    neq(firstOutput({ realTostring = true }), firstOutput({ realTostring = true }), "addresses are used")
+    -- math.random's startup state.
+    neq(firstOutput({ random = 0.25 }), firstOutput({ random = 0.5 }), "math.random is used")
+end)
+
+test("one random output does not reveal the next, and the seed file reveals no output", function()
+    local C = cc.newComputer(46)
+    local XC = C:loadAPI("apis/xEncrypt.lua")
+    XC.seed()
+    local seedKey = XC.fromHex(C.files[".xEncrypt.seed"])
+    local a, b = XC.randomBytes(32), XC.randomBytes(32)
+    local zero12 = string.rep("\0", 12)
+    ok(not XC.chacha20(a, zero12, 0, string.rep("\0", 64)):find(b, 1, true), "an output is the next generator key")
+    local fromSeed = XC.chacha20(seedKey, zero12, 0, string.rep("\0", 128))
+    ok(not fromSeed:find(a, 1, true) and not fromSeed:find(b, 1, true), "the seed file holds the live generator key")
 end)
 
 test("seeding finishes when the clock never moves", function()
@@ -288,19 +347,19 @@ test("randomInt stays in range and covers it", function()
     end
 end)
 
-test("addEntropy data reaches the seed file at the next random draw", function()
-    local function deterministicComputer()
-        local C = cc.newComputer(45, { clock = 1, epoch = 7 })
-        C.env.tostring = function(v)
-            local t = type(v)
-            if t == "table" or t == "function" then return t end
-            return tostring(v)
-        end
-        C.env.math = setmetatable({ random = function() return 4 end }, { __index = math })
-        return C
+test("randomInt is not biased towards low values", function()
+    -- With plain modulo instead of rejection sampling, values below 2^30 would
+    -- come up half of the time for this range instead of a third.
+    local low, n = 0, 3000
+    for _ = 1, n do
+        if X.randomInt(0, 3 * 2 ^ 30 - 1) < 2 ^ 30 then low = low + 1 end
     end
+    ok(low / n > 0.28 and low / n < 0.39, "fraction below 2^30: " .. low / n)
+end)
+
+test("addEntropy data reaches the seed file at the next random draw", function()
     local function nextBoot(secret)
-        local C = deterministicComputer()
+        local C = deterministicComputer({ id = 45 })
         local XC = C:loadAPI("apis/xEncrypt.lua")
         XC.seed()
         local before = C.files[".xEncrypt.seed"]
@@ -326,16 +385,20 @@ test("a read-only disk does not break random generation", function()
     eq(#XC.randomBytes(16), 16)
 end)
 
-test("two computers with identical clocks get different streams", function()
+test("two computers with the same ID and clocks get different streams", function()
+    -- Everything public is equal, so only the secret sources can tell them apart.
     local P = cc.newComputer(10, { clock = 1, epoch = 5 })
-    local Q = cc.newComputer(11, { clock = 1, epoch = 5 })
+    local Q = cc.newComputer(10, { clock = 1, epoch = 5 })
     neq(P:loadAPI("apis/xEncrypt.lua").randomBytes(32), Q:loadAPI("apis/xEncrypt.lua").randomBytes(32))
 end)
 
-test("addEntropy accepts strings only", function()
-    X.addEntropy("key press at 12345")
-    eq(#X.randomBytes(8), 8)
-    raises(function() X.addEntropy(5) end, "string expected")
+test("addEntropy works before the first random draw and accepts strings only", function()
+    local C = cc.newComputer(47)
+    local XC = C:loadAPI("apis/xEncrypt.lua")
+    XC.addEntropy("key press at 12345")
+    ok(C.files[".xEncrypt.seed"], "seeded by addEntropy")
+    eq(#XC.randomBytes(8), 8)
+    raises(function() XC.addEntropy(5) end, "string expected")
 end)
 
 ---------------------------------------------------------------------------
@@ -343,6 +406,16 @@ end)
 ---------------------------------------------------------------------------
 
 local key = X.generateKey()
+
+test("known-answer token (the wire format)", function()
+    -- Built independently with tests/reference.py (key 00..1f, nonce 40..4b),
+    -- so subkey labels, counter and aad framing cannot change unnoticed even
+    -- where the cryptography package is missing.
+    local kat = "01404142434445464748494a4ba370fef451c76352cdb4e4c0f4064730f45095"
+        .. "9881e151faf72f4fb6741f812b9c3517816bd9c8c6c92e3da50e20"
+    eq(X.decrypt(hex(KEY), kat, "from 7"), "attack at dawn")
+    eq({ X.decrypt(hex(KEY), kat, "from 8") }, { nil, "authentication failed" })
+end)
 
 test("encrypt/decrypt round trip", function()
     for _, plaintext in ipairs({ "", "hello", bytesFrom(0, 255), string.rep("long message ", 100) }) do
@@ -387,6 +460,14 @@ test("every modified byte is detected", function()
     end
     local badVersion = "\2" .. raw:sub(2)
     eq({ X.decrypt(key, X.toHex(badVersion)) }, { nil, "unsupported token version" })
+    -- The same bit flipped in two tag bytes: differences must not cancel out.
+    for bit = 0, 7 do
+        local m = 2 ^ bit
+        local function flip(b) return string.char((b % (2 * m) >= m) and b - m or b + m) end
+        local n = #raw
+        local forged = raw:sub(1, n - 2) .. flip(raw:byte(n - 1)) .. flip(raw:byte(n))
+        eq({ X.decrypt(key, X.toHex(forged)) }, { nil, "authentication failed" }, "bit " .. bit)
+    end
 end)
 
 test("malformed tokens are rejected without raising", function()
@@ -400,23 +481,33 @@ test("malformed tokens are rejected without raising", function()
     eq({ X.decrypt(key, token:sub(1, -3)) }, { nil, "authentication failed" })
     eq({ X.decrypt(key, token:upper()) }, { nil, "invalid token" }, "tokens are canonical lowercase hex")
     eq({ X.decrypt(key, " " .. token:sub(2)) }, { nil, "invalid token" })
+    -- Odd lengths long enough to pass the other checks.
+    eq({ X.decrypt(key, token .. "0") }, { nil, "invalid token" })
+    eq({ X.decrypt(key, token:sub(1, -2)) }, { nil, "invalid token" })
 end)
 
 test("decrypt rejects tokens longer than maxLength before doing any work", function()
     local token = X.encrypt(key, string.rep("m", 100))
     eq(X.decrypt(key, token, nil, 100), string.rep("m", 100))
-    eq({ X.decrypt(key, token, nil, 99) }, { nil, "invalid token" })
+    eq({ X.decrypt(key, token, nil, 99) }, { nil, "token too long" })
     -- Default cap is 65536 bytes of plaintext; a forged oversized token is
     -- rejected by length alone.
-    eq({ X.decrypt(key, string.rep("0", 2 * (45 + 65537))) }, { nil, "invalid token" })
+    eq({ X.decrypt(key, string.rep("0", 2 * (45 + 65537))) }, { nil, "token too long" })
+    eq({ X.decrypt(key, string.rep("z", 2 * (45 + 65537))) }, { nil, "token too long" }, "size is checked before content")
+    -- Exactly 65536 bytes passes the default size check (and then fails the tag).
+    eq({ X.decrypt(key, "01" .. string.rep("0", 2 * (44 + 65536))) }, { nil, "authentication failed" })
     raises(function() X.decrypt(key, token, nil, "big") end, "non%-negative")
+    raises(function() X.decrypt(key, token, nil, 0 / 0) end, "non%-negative")
+    raises(function() X.decrypt(key, token, nil, -1) end, "non%-negative")
+    eq(X.decrypt(key, token, nil, math.huge), string.rep("m", 100), "math.huge means no limit")
 end)
 
 test("decrypt accepts exactly 65536 bytes by default (heavy)", function()
     if not cc.heavy then skip("heavy") end
     local big = string.rep("z", 65536)
     eq(X.decrypt(key, X.encrypt(key, big)), big)
-    eq({ X.decrypt(key, X.encrypt(key, big .. "z")) }, { nil, "invalid token" })
+    eq({ X.decrypt(key, X.encrypt(key, big .. "z")) }, { nil, "token too long" })
+    eq(X.decrypt(key, X.encrypt(key, big .. "z"), nil, 65537), big .. "z")
 end)
 
 test("bad keys and arguments raise", function()
@@ -454,6 +545,12 @@ test("deriveKey is deterministic and depends on salt and password", function()
     neq(X.deriveKey("correct horse", "pepper", 10), k)
     neq(X.deriveKey("correct horsf", "salt", 10), k)
     eq(X.decrypt(k, X.encrypt(k, "ok")), "ok")
+end)
+
+test("deriveKey default matches the README example (1000 iterations)", function()
+    -- Value from Python's hashlib.pbkdf2_hmac("sha256", ..., 1000, 32).
+    eq(X.deriveKey("correct horse battery staple", "my-app"),
+        "eaf65d5d722a96ee0d110dd741e3ad951fbbd8a5bae7663f08e49e82dccf1781")
 end)
 
 test("hashPassword and verifyPassword", function()

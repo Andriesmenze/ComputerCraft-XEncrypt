@@ -16,6 +16,12 @@ EXE = os.environ.get("CRAFTOS_PC", r"C:\Program Files\CraftOS-PC\CraftOS-PC_cons
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STARTUP = r"""
+-- CraftOS-PC adds os.epoch("nano"); CC:Tweaked raises an error for it.
+local epoch = os.epoch
+os.epoch = function(kind)
+    if type(kind) == "string" and kind:lower() == "nano" then error("Unsupported operation", 2) end
+    return epoch(kind)
+end
 local log = fs.open("/selftest.log", "w")
 local function capture(prefix, ...)
     local t = {}
@@ -35,6 +41,7 @@ os.shutdown()
 
 
 def main():
+    sys.stdout.reconfigure(errors="backslashreplace")
     if not os.path.exists(EXE):
         print(f"CraftOS-PC not found at {EXE} (set CRAFTOS_PC)")
         return 2

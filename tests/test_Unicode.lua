@@ -88,6 +88,55 @@ test("leading zeros only pad to 4 digits, so following hex text is not swallowed
     eq(U.transcodeUnicodeString("U+110000"), "?")
 end)
 
+test("UTF-8 boundaries", function()
+    -- Edges of each encoded length and of the valid code point range.
+    local cases = {
+        { "U+007F", "\127" }, { "U+0080", "\194\128" }, { "U+07FF", "\223\191" },
+        { "U+0800", "\224\160\128" }, { "U+D7FF", "\237\159\191" }, { "U+E000", "\238\128\128" },
+        { "U+FFFF", "\239\191\191" }, { "U+10000", "\240\144\128\128" }, { "U+10FFFF", "\244\143\191\191" },
+    }
+    for _, c in ipairs(cases) do
+        eq(U.transcodeUnicodeCharacter(c[1], true), c[2], c[1] .. " encodes")
+        eq(U.transcodeUTF8String(c[2]), c[1], c[1] .. " decodes")
+    end
+    eq(U.transcodeUnicodeCharacter("U+D800", true), nil)
+    eq(U.transcodeUnicodeCharacter("U+DFFF", true), nil)
+    eq(U.transcodeUnicodeCharacter("U+110000", true), nil)
+    eq(U.transcodeUnicodeCharacter("U+00FF"), "\255")
+    eq(U.transcodeUnicodeCharacter("U+0100"), "?")
+    -- Sequences just outside the valid forms fall back to single bytes.
+    eq(U.transcodeUTF8String("\193\191"), "U+00C1U+00BF") -- overlong 2-byte lead
+    eq(U.transcodeUTF8String("\194\127"), "U+00C2U+007F") -- continuation too low
+    eq(U.transcodeUTF8String("\224\159\191"), "U+00E0U+009FU+00BF") -- overlong 3-byte
+    eq(U.transcodeUTF8String("\240\143\191\191"), "U+00F0U+008FU+00BFU+00BF") -- overlong 4-byte
+    eq(U.transcodeUTF8String("\245\128\128\128"), "U+00F5U+0080U+0080U+0080") -- lead above F4
+    eq(U.transcodeUTF8String("\226\130\192"), "U+00E2U+0082U+00C0") -- bad last continuation
+end)
+
+test("both parsers follow the same notation rule", function()
+    for _, code in ipairs({ "U+0000E9", "U+01F600", "U+010000", "U+00041", "U+0D800" }) do
+        eq(U.transcodeUnicodeCharacter(code), nil, code .. " is not canonical")
+    end
+    for _, code in ipairs({ "U+00E9", "U+1F600", "U+10000", "U+10FFFF", "u+00e9" }) do
+        eq(U.transcodeUnicodeString(code, true), U.transcodeUnicodeCharacter(code, true), code)
+    end
+end)
+
+test("fromCC reads every byte as one character", function()
+    local samples = {
+        "\187Spa\223\171",          -- German quotes: sharp s + guillemet is also valid UTF-8
+        "\171\160caf\233\160\187",  -- French quotes with no-break spaces
+        "\195\169",                 -- would be one UTF-8 character
+    }
+    for _, s in ipairs(samples) do
+        local codes = U.transcodeUTF8String(s, true)
+        eq(#codes, 6 * #s, "one code per byte")
+        eq(U.transcodeUnicodeString(codes), s)
+    end
+    neq(U.transcodeUTF8String("\223\171"), U.transcodeUTF8String("\223\171", true))
+    eq(U.transcodeUTF8String("\223\171", true), "U+00DFU+00AB")
+end)
+
 test("invalid notation", function()
     eq(U.transcodeUnicodeCharacter("U+12"), nil)
     eq(U.transcodeUnicodeCharacter("U+0041x"), nil)

@@ -9,22 +9,32 @@
 
 CC:Tweaked runs Lua 5.2 semantics with bit32 (Cobalt), so lua52 is the reference
 runtime; the others check that nothing depends on version-specific behaviour.
+`pip install cryptography` adds the comparisons with OpenSSL (they are reported
+as skipped without it).
 """
 import argparse
 import glob
 import importlib
+import importlib.util
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import reference  # noqa: E402  (differential tests against Python implementations)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))).replace("\\", "/")
 RUNTIMES = ["lua52", "lua51", "lua53", "lua54", "luajit21"]
 
+# A test file that runs longer than the time limit (in CPU seconds) fails
+# instead of hanging the runner.
 BOOT = r"""
-local root, testFile, heavy = ...
+local root, testFile, heavy, timeLimit = ...
+local deadline = os.clock() + timeLimit
+debug.sethook(function()
+    if os.clock() > deadline then
+        error("timeout: the test file ran longer than " .. timeLimit .. " s", 2)
+    end
+end, "", 1000000)
 local cc = dofile(root .. "/tests/cc_env.lua")
 cc.root = root
 cc.heavy = heavy
@@ -37,11 +47,19 @@ return T.summary()
 
 
 def main():
+    # Keep failure text printable when the output is piped (cp1252 on Windows).
+    sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--lua", default=",".join(RUNTIMES), help="comma separated lupa runtimes")
+    parser.add_argument("--lua", help="comma separated lupa runtimes (default: all that are available)")
     parser.add_argument("-k", default="", help="only run test files whose name contains this")
     parser.add_argument("--heavy", action="store_true", help="include slow tests")
+    parser.add_argument("--timeout", type=float, default=600, help="CPU seconds allowed per test file")
     args = parser.parse_args()
+
+    if importlib.util.find_spec("lupa") is None:
+        print("lupa is not installed (pip install lupa)")
+        return 2
+    import reference  # differential tests against Python implementations
 
     files = sorted(f.replace("\\", "/") for f in glob.glob(os.path.join(ROOT, "tests", "test_*.lua")))
     files = [f for f in files if args.k in os.path.basename(f)]
@@ -49,18 +67,23 @@ def main():
         print("no test files found")
         return 1
 
-    total_failed = 0
-    for name in [r.strip() for r in args.lua.split(",") if r.strip()]:
+    explicit = args.lua is not None
+    names = [r.strip() for r in (args.lua or ",".join(RUNTIMES)).split(",") if r.strip()]
+    total_failed, ran = 0, 0
+    for name in names:
         try:
             module = importlib.import_module("lupa." + name)
         except ImportError:
-            print(f"{name}: not available in this lupa build, skipped")
+            print(f"{name}: not available in this lupa build" + ("" if explicit else ", skipped"))
+            total_failed += 1 if explicit else 0
             continue
+        ran += 1
         for path in files:
             runtime = module.LuaRuntime(unpack_returned_tuples=True, encoding=None)
             started = time.time()
             try:
-                passed, failed, skipped, failures = runtime.execute(BOOT, ROOT.encode(), path.encode(), args.heavy)
+                passed, failed, skipped, failures = runtime.execute(
+                    BOOT, ROOT.encode(), path.encode(), args.heavy, args.timeout)
                 failures = failures.decode("utf-8", "replace")
             except Exception as exc:  # the test file itself failed to load or run
                 passed, failed, skipped, failures = 0, 1, 0, f"{type(exc).__name__}: {exc}"
@@ -83,6 +106,9 @@ def main():
             if failed:
                 print("    " + str(failures).replace("\n", "\n    "))
             total_failed += failed
+    if ran == 0:
+        print("no Lua runtime ran")
+        return 1
     return 1 if total_failed else 0
 
 

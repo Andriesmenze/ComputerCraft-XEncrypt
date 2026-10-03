@@ -206,7 +206,17 @@ function cc.newComputer(id, opts)
         echo = opts.echo,
     }, Computer)
 
-    local env = setmetatable({}, { __index = _G })
+    -- Only what a CC:Tweaked computer's _G offers (the Lua base library and the
+    -- CC APIs emulated below), not the host's globals, so an API that uses
+    -- something CC lacks (io, require, os.getenv, the test helpers) fails here
+    -- as it would in game.
+    local env = {}
+    for _, name in ipairs({ "assert", "error", "getmetatable", "ipairs", "load", "loadstring", "next",
+        "pairs", "pcall", "rawequal", "rawget", "rawlen", "rawset", "select", "setmetatable", "tonumber",
+        "tostring", "type", "xpcall", "_VERSION", "string", "table", "math", "coroutine", "utf8" }) do
+        env[name] = _G[name]
+    end
+    env.unpack = table.unpack or unpack
     env._G = env
     self.env = env
 
@@ -220,20 +230,24 @@ function cc.newComputer(id, opts)
     env.print = out
     env.printError = out
 
-    -- os: the real os library plus the CC functions.
-    local osT = {}
-    for k, v in pairs(os) do osT[k] = v end
+    -- os: the CC functions (and os.date); none of the host's os.remove,
+    -- os.getenv, os.exit and so on, which CC does not have.
+    local osT = { date = os.date }
     osT.getComputerID = function() return self.id end
     osT.computerID = osT.getComputerID
     osT.getComputerLabel = function() return nil end
     osT.clock = function() return self.clockValue end
+    -- CC:Tweaked accepts only these kinds (any case); "nano" exists only in
+    -- CraftOS-PC.
     osT.epoch = function(kind)
-        kind = kind or "ingame"
+        kind = string.lower(kind or "ingame")
         if kind == "utc" or kind == "local" then
             self.epochValue = self.epochValue + 1
             return self.epochValue
+        elseif kind == "ingame" then
+            return 86400000
         end
-        return 0
+        error("Unsupported operation", 2)
     end
     osT.time = function() return 6.0 end
     osT.day = function() return 1 end
@@ -326,8 +340,10 @@ function cc.newComputer(id, opts)
         return r
     end
     function settings.load(path)
-        local content = self.files[path or ".settings"]
-        if content == nil then return false end
+        local handle = fsT.open(path or ".settings", "r")
+        if not handle then return false end
+        local content = handle.readAll()
+        handle.close()
         local t = unserialize(content)
         if type(t) ~= "table" then return false end
         for k, v in pairs(t) do
@@ -339,7 +355,10 @@ function cc.newComputer(id, opts)
         return true
     end
     function settings.save(path)
-        self.files[path or ".settings"] = serialize(values)
+        local handle = fsT.open(path or ".settings", "w")
+        if not handle then return false end
+        handle.write(serialize(values))
+        handle.close()
         return true
     end
     env.settings = settings
@@ -384,15 +403,5 @@ end
 function Computer:setClock(v) self.clockValue = v end
 function Computer:lastOutput() return self.output[#self.output] end
 function Computer:clearOutput() for i = #self.output, 1, -1 do self.output[i] = nil end end
-
--- Runs fn with this computer's environment (so `settings`, `os`, and loaded
--- APIs resolve to this computer's).
-function Computer:run(fn, ...)
-    if setfenv then
-        setfenv(fn, self.env)
-        return fn(...)
-    end
-    return fn(...)
-end
 
 return cc

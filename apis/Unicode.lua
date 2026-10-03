@@ -5,15 +5,23 @@
 -- where it is valid UTF-8, and any other byte as the code point with the same
 -- value (ISO-8859-1). For 0xA0-0xFF that is the character CC shows; CC's drawing
 -- characters 0x80-0x9F become the control code points U+0080-U+009F, not
--- look-alike block characters. A CC string which happens to be valid UTF-8 (for
--- example "\195\169") is read as one UTF-8 character ("U+00E9").
+-- look-alike block characters. A CC string which happens to be valid UTF-8 is
+-- read as one UTF-8 character: "\195\169" becomes "U+00E9", and so does
+-- natural in-game text such as "\223\171" (sharp s, then a guillemet). For text
+-- typed in game or read in text mode, pass fromCC = true to transcodeUTF8String
+-- so that every byte is one character.
 --
 -- To get UTF-8 from outside the game unchanged on every CC:Tweaked version,
 -- read it as bytes: fs.open(path, "rb") or http.get(url, headers, true). Before
 -- CC:Tweaked 1.109, text-mode reads turn every character above U+00FF into "?".
 --
 -- Output text uses the CC charset by default (one byte per character, "?" for
--- code points above U+00FF); pass asUTF8 = true to get UTF-8 instead.
+-- code points above U+00FF); pass asUTF8 = true to get UTF-8 instead. Write
+-- UTF-8 output with fs.open(path, "wb"): before 1.109, text-mode writes and
+-- HTTP request bodies re-encode every byte from 0x80 up.
+--
+-- Notation: "U+" (any case) and 4 to 6 hex digits; a leading zero only pads to
+-- 4 digits, so "U+00E9" is valid and "U+0000E9" is not.
 
 Unicode_VERSION = "0.2"
 
@@ -96,6 +104,9 @@ end
 function transcodeUnicodeCharacter(unicode_Character, asUTF8)
     expectString(unicode_Character, "transcodeUnicodeCharacter")
     local hex = unicode_Character:match("^[Uu]%+(%x%x%x%x%x?%x?)$")
+    if hex and #hex > 4 and hex:sub(1, 1) == "0" then
+        return nil -- leading zeros only pad to 4 digits, as in transcodeUnicodeString
+    end
     local cp = hex and parseCode(hex)
     if not cp then
         return nil
@@ -103,12 +114,18 @@ function transcodeUnicodeCharacter(unicode_Character, asUTF8)
     return toCharacter(cp, asUTF8)
 end
 
--- "H\233" -> "U+0048U+00E9"
-function transcodeUTF8String(utf8_String)
+-- "H\233" -> "U+0048U+00E9". With fromCC = true every byte is one character
+-- (the CC charset), which is what text typed in game is.
+function transcodeUTF8String(utf8_String, fromCC)
     expectString(utf8_String, "transcodeUTF8String")
     local out, i, n = {}, 1, #utf8_String
     while i <= n do
-        local cp, length = decodeAt(utf8_String, i)
+        local cp, length
+        if fromCC then
+            cp, length = byte(utf8_String, i), 1
+        else
+            cp, length = decodeAt(utf8_String, i)
+        end
         out[#out + 1] = codeNotation(cp)
         i = i + length
     end

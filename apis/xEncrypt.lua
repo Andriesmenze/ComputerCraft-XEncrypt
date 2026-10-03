@@ -13,14 +13,16 @@
 -- encrypt() is ChaCha20 + HMAC-SHA256 (encrypt-then-MAC) with a random 96 bit nonce.
 --
 -- Errors: wrong argument types or malformed keys raise an error (programming
--- mistakes); a token that is malformed, tampered with or encrypted with another
--- key makes decrypt() return nil and a message.
+-- mistakes); a token that is malformed, too long, tampered with or encrypted
+-- with another key makes decrypt() return nil and a message.
 --
 -- Randomness: CC has no secure random source. On first use (or seed()) the
 -- generator is seeded from clocks, IDs, math.random, table addresses and timing
 -- jitter, plus the seed file "/.xEncrypt.seed", which is rewritten so entropy
--- accumulates over reboots. Call addEntropy() with anything unpredictable you
--- have (key press timings, received messages) to strengthen it.
+-- accumulates over reboots. Call addEntropy(string) with local data other
+-- players cannot observe, such as tostring(os.epoch("utc")) at each key press.
+-- Never pass data received over the network: it is public, and the sender
+-- picks its type and size (hashing it does not yield).
 --
 -- The library never yields; keep single calls well below CC's 7 second limit.
 
@@ -41,8 +43,10 @@ local MOD32 = 4294967296
 local SEED_FILE = "/.xEncrypt.seed"
 local DEFAULT_ITERATIONS = 1000
 -- About 0.6 ms per iteration on CC's Cobalt VM, so the cap keeps one PBKDF2
--- run at around half of CC's 7 second "too long without yielding" limit.
+-- run at around half of CC's 7 second "too long without yielding" limit. It
+-- bounds the total work: iterations times the number of 32-byte output blocks.
 local MAX_ITERATIONS = 5000
+local MAX_RANDOM_BYTES = 16777216 -- far more than one call can produce in 7 s
 local DEFAULT_MAX_LENGTH = 65536
 
 local function expectString(value, index, name)
@@ -238,6 +242,9 @@ function pbkdf2(password, salt, iterations, length)
     if type(length) ~= "number" or length < 1 or length > 1024 or length % 1 ~= 0 then
         error("bad argument #4 to 'pbkdf2' (length must be an integer from 1 to 1024)", 2)
     end
+    if iterations * ceil(length / 32) > MAX_ITERATIONS then
+        error(format("bad argument #4 to 'pbkdf2' (iterations * ceil(length / 32) must be at most %d)", MAX_ITERATIONS), 2)
+    end
     local inner, outer = hmacInit(password)
     local blocks = {}
     for i = 1, ceil(length / 32) do
@@ -426,8 +433,8 @@ end
 
 -- Returns n random bytes (raw string).
 function randomBytes(n)
-    if type(n) ~= "number" or n < 0 or n % 1 ~= 0 then
-        error("bad argument #1 to 'randomBytes' (non-negative integer expected)", 2)
+    if type(n) ~= "number" or n < 0 or n % 1 ~= 0 or n > MAX_RANDOM_BYTES then
+        error("bad argument #1 to 'randomBytes' (integer from 0 to " .. MAX_RANDOM_BYTES .. " expected)", 2)
     end
     ensureSeeded()
     local stream = chacha20(generatorKey, ZERO_NONCE, 0, rep("\0", 32 + n))
@@ -512,19 +519,25 @@ end
 
 -- Returns the plaintext, or nil and a message if the token is malformed, was
 -- modified, or was made with another key or aad. Tokens for plaintexts longer
--- than maxLength bytes (default 65536) are rejected before any work is done,
--- so a huge token received over rednet cannot stall the computer.
+-- than maxLength bytes (default 65536) are rejected with "token too long"
+-- before any work is done, so a huge token received over rednet cannot stall
+-- the computer; pass a larger maxLength to accept bigger messages.
 function decrypt(key, token, aad, maxLength)
     local raw = rawKey(key, 1, "decrypt")
     aad = aad or ""
     expectString(aad, 3, "decrypt")
     maxLength = maxLength or DEFAULT_MAX_LENGTH
-    if type(maxLength) ~= "number" or maxLength < 0 then
+    if type(maxLength) ~= "number" or not (maxLength >= 0) then -- also rejects NaN
         error("bad argument #4 to 'decrypt' (non-negative number expected)", 2)
     end
     local overhead = 1 + NONCE_SIZE + TAG_SIZE
-    if type(token) ~= "string" or #token < 2 * overhead or #token > 2 * (overhead + maxLength)
-        or #token % 2 ~= 0 or token:find("[^0-9a-f]") then
+    if type(token) ~= "string" then
+        return nil, "invalid token"
+    end
+    if #token > 2 * (overhead + maxLength) then
+        return nil, "token too long"
+    end
+    if #token < 2 * overhead or #token % 2 ~= 0 or token:find("[^0-9a-f]") then
         return nil, "invalid token"
     end
     if token:sub(1, 2) ~= toHex(TOKEN_VERSION) then
