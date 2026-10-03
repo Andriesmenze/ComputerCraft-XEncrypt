@@ -239,10 +239,11 @@ end)
 -- A computer whose entropy sources are all fixed, so a test can vary one input
 -- at a time. opts.seed is the seed file content; opts.epochEvery = k makes
 -- os.epoch("utc") advance 1 ms every k calls (timing jitter); opts.realTostring
--- keeps table addresses; opts.random is what math.random returns.
+-- keeps table addresses; opts.random is what math.random returns; opts.epoch
+-- is the real-world time os.epoch("utc") starts at.
 local function deterministicComputer(opts)
     opts = opts or {}
-    local C = cc.newComputer(opts.id or 42, { clock = 1, epoch = 7 })
+    local C = cc.newComputer(opts.id or 42, { clock = 1, epoch = opts.epoch or 7 })
     if not opts.realTostring then
         C.env.tostring = function(v)
             local t = type(v)
@@ -278,6 +279,15 @@ test("the seed file feeds the generator", function()
     eq(firstOutput({ seed = "garbage" }), firstOutput())
     eq(firstOutput({ seed = string.rep("A", 64) }), firstOutput())
     eq(firstOutput({ seed = string.rep("a", 65) }), firstOutput())
+end)
+
+test("restoring an old seed file (world rollback) does not repeat the random stream", function()
+    -- Same computer and the same restored seed file; only the real-world time
+    -- differs, as when a world backup is loaded later. Computers reboot on load
+    -- and reseed, and the pool includes os.epoch("utc"), so nonces differ.
+    local seed = string.rep("c", 64)
+    eq(firstOutput({ seed = seed, epoch = 1000 }), firstOutput({ seed = seed, epoch = 1000 }), "only the time differs")
+    neq(firstOutput({ seed = seed, epoch = 1000 }), firstOutput({ seed = seed, epoch = 1001 }))
 end)
 
 test("each source another player cannot know changes the key", function()
